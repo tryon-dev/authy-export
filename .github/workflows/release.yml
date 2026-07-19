@@ -1,70 +1,80 @@
 name: Build and Release
 
 on:
-  workflow_dispatch:
   push:
     tags:
-      - '*'
+      - "*"
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v1.2.3"
+        required: true
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
   build_and_release:
     runs-on: ubuntu-latest
 
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v5
 
-      - name: Setup Go
-        uses: actions/setup-go@v2
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.20.5'
+          go-version: "1.20.5"
+          cache: true
 
-      - name: Build Linux binary
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o authy-export-linux-amd64 -ldflags "-s -w" cmd/authy-export/authy-export.go
+      - name: Build release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Build macOS binary
-        run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o authy-export-darwin-arm64 -ldflags "-s -w" cmd/authy-export/authy-export.go
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build \
+              -trimpath \
+              -ldflags="-s -w" \
+              -o authy-export-linux-amd64 \
+              ./cmd/authy-export
 
-      - name: Build Windows binary
-        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o authy-export-windows-amd64.exe -ldflags "-s -w" cmd/authy-export/authy-export.go
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
+            go build \
+              -trimpath \
+              -ldflags="-s -w" \
+              -o authy-export-darwin-arm64 \
+              ./cmd/authy-export
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: ${{ github.ref }}
-          draft: true
-          prerelease: false
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build \
+              -trimpath \
+              -ldflags="-s -w" \
+              -o authy-export-windows-amd64.exe \
+              ./cmd/authy-export
+
+      - name: Generate checksums
+        run: |
+          sha256sum \
+            authy-export-linux-amd64 \
+            authy-export-darwin-arm64 \
+            authy-export-windows-amd64.exe \
+            > checksums.txt
+
+      - name: Create draft release and upload binaries
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Linux binary
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./authy-export-linux-amd64
-          asset_name: authy-export-linux-amd64
-          asset_content_type: application/octet-stream
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload macOS binary
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./authy-export-darwin-arm64
-          asset_name: authy-export-darwin-arm64
-          asset_content_type: application/octet-stream
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Windows binary
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./authy-export-windows-amd64.exe
-          asset_name: authy-export-windows-amd64.exe
-          asset_content_type: application/octet-stream
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            authy-export-linux-amd64 \
+            authy-export-darwin-arm64 \
+            authy-export-windows-amd64.exe \
+            checksums.txt \
+            --title "$RELEASE_TAG" \
+            --draft \
+            --verify-tag

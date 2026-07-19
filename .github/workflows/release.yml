@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example 1.0.0"
+        description: "Version de la release, par exemple 1.0.0"
         required: true
         type: string
 
@@ -17,6 +17,7 @@ permissions:
 
 jobs:
   build_and_release:
+    name: Build and Release
     runs-on: ubuntu-latest
 
     env:
@@ -28,29 +29,45 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
+      - name: Setup Go
         uses: actions/setup-go@v6
         with:
           go-version: "1.20.5"
           cache: true
 
-      - name: Build release binaries
-        shell: bash
+      - name: Build Linux binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
         run: |
-          set -euo pipefail
-
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -trimpath -ldflags="-s -w" \
+          go build \
+            -trimpath \
+            -ldflags="-s -w" \
             -o authy-export-linux-amd64 \
             ./cmd/authy-export
 
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
-            go build -trimpath -ldflags="-s -w" \
+      - name: Build macOS binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: darwin
+          GOARCH: arm64
+        run: |
+          go build \
+            -trimpath \
+            -ldflags="-s -w" \
             -o authy-export-darwin-arm64 \
             ./cmd/authy-export
 
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-            go build -trimpath -ldflags="-s -w" \
+      - name: Build Windows binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go build \
+            -trimpath \
+            -ldflags="-s -w" \
             -o authy-export-windows-amd64.exe \
             ./cmd/authy-export
 
@@ -62,31 +79,74 @@ jobs:
             authy-export-windows-amd64.exe \
             > checksums.txt
 
+      - name: Verify generated files
+        run: |
+          set -euo pipefail
+
+          test -f authy-export-linux-amd64
+          test -f authy-export-darwin-arm64
+          test -f authy-export-windows-amd64.exe
+          test -f checksums.txt
+
+          ls -lah \
+            authy-export-linux-amd64 \
+            authy-export-darwin-arm64 \
+            authy-export-windows-amd64.exe \
+            checksums.txt
+
       - name: Create tag for manual release
         if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git ls-remote --exit-code --tags origin \
+            "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Le tag ${RELEASE_TAG} existe déjà."
+          else
+            echo "Création du tag ${RELEASE_TAG} sur ${GITHUB_SHA}."
+            git tag "${RELEASE_TAG}" "${GITHUB_SHA}"
+            git push origin "refs/tags/${RELEASE_TAG}"
+          fi
+
+      - name: Create GitHub release and upload binaries
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if git ls-remote --exit-code --tags origin \
-            "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Tag $RELEASE_TAG already exists."
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "La release ${RELEASE_TAG} existe déjà. Mise à jour des fichiers."
+
+            gh release upload "${RELEASE_TAG}" \
+              authy-export-linux-amd64 \
+              authy-export-darwin-arm64 \
+              authy-export-windows-amd64.exe \
+              checksums.txt \
+              --clobber
           else
-            git tag "$RELEASE_TAG" "$GITHUB_SHA"
-            git push origin "refs/tags/$RELEASE_TAG"
+            echo "Création de la release ${RELEASE_TAG}."
+
+            gh release create "${RELEASE_TAG}" \
+              authy-export-linux-amd64 \
+              authy-export-darwin-arm64 \
+              authy-export-windows-amd64.exe \
+              checksums.txt \
+              --title "${RELEASE_TAG}" \
+              --generate-notes \
+              --verify-tag
           fi
 
-      - name: Create draft release and upload binaries
+      - name: Show release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$RELEASE_TAG" \
-            authy-export-linux-amd64 \
-            authy-export-darwin-arm64 \
-            authy-export-windows-amd64.exe \
-            checksums.txt \
-            --title "$RELEASE_TAG" \
-            --draft \
-            --verify-tag
+          gh release view "${RELEASE_TAG}" \
+            --json url,tagName,isDraft,assets \
+            --jq '{
+              url: .url,
+              tag: .tagName,
+              draft: .isDraft,
+              assets: [.assets[].name]
+            }'

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v1.2.3"
+        description: "Release tag, for example 1.0.0"
         required: true
         type: string
 
@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -38,25 +40,19 @@ jobs:
           set -euo pipefail
 
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build \
-              -trimpath \
-              -ldflags="-s -w" \
-              -o authy-export-linux-amd64 \
-              ./cmd/authy-export
+            go build -trimpath -ldflags="-s -w" \
+            -o authy-export-linux-amd64 \
+            ./cmd/authy-export
 
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
-            go build \
-              -trimpath \
-              -ldflags="-s -w" \
-              -o authy-export-darwin-arm64 \
-              ./cmd/authy-export
+            go build -trimpath -ldflags="-s -w" \
+            -o authy-export-darwin-arm64 \
+            ./cmd/authy-export
 
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-            go build \
-              -trimpath \
-              -ldflags="-s -w" \
-              -o authy-export-windows-amd64.exe \
-              ./cmd/authy-export
+            go build -trimpath -ldflags="-s -w" \
+            -o authy-export-windows-amd64.exe \
+            ./cmd/authy-export
 
       - name: Generate checksums
         run: |
@@ -65,6 +61,22 @@ jobs:
             authy-export-darwin-arm64 \
             authy-export-windows-amd64.exe \
             > checksums.txt
+
+      - name: Create tag for manual release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git ls-remote --exit-code --tags origin \
+            "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Tag $RELEASE_TAG already exists."
+          else
+            git tag "$RELEASE_TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
 
       - name: Create draft release and upload binaries
         env:
